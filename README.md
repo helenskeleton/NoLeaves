@@ -1,2 +1,9 @@
 # NoLeaves
-Removes Leaves in Gorilla Tag!
+
+## Install
+Put `NoLeaves.dll` in `BepInEx/plugins/`
+
+## Build
+```
+dotnet build
+```
