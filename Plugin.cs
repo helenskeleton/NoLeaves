@@ -420,7 +420,7 @@ namespace NoLeaves
                 }
 
                 string responseJson = await response.Content.ReadAsStringAsync();
-                string latestVersionText = ExtractJsonStringValue(responseJson, "tag_name");
+                string latestVersionText = ExtractLatestReleaseVersion(responseJson);
                 if (!TryParseVersion(latestVersionText, out Version latestVersion))
                 {
                     return UpdateCheckResult.Fail($"Could not parse latest release version '{latestVersionText}'.");
@@ -458,6 +458,23 @@ namespace NoLeaves
             }
 
             return Regex.Unescape(match.Groups["value"].Value);
+        }
+
+        private static string ExtractLatestReleaseVersion(string json)
+        {
+            string releaseName = ExtractJsonStringValue(json, "name");
+            if (TryParseVersion(releaseName, out Version namedVersion))
+            {
+                return namedVersion.ToString();
+            }
+
+            string tagName = ExtractJsonStringValue(json, "tag_name");
+            if (TryParseVersion(tagName, out Version taggedVersion))
+            {
+                return taggedVersion.ToString();
+            }
+
+            return string.Empty;
         }
 
         private static bool TryParseVersion(string rawVersion, out Version version)
