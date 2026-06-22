@@ -1,25 +1,31 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using BepInEx;
-using BepInEx.Logging;
 using GorillaNetworking;
 using Photon.Pun;
+using TMPro;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 namespace NoLeaves
 {
     [BepInPlugin(PluginInfo.PLUGIN_GUID, PluginInfo.PLUGIN_NAME, PluginInfo.PLUGIN_VERSION)]
     public class Plugin : BaseUnityPlugin
     {
-        internal static new ManualLogSource Logger;
+        internal static new CompatibilityLogger Logger { get; } = new CompatibilityLogger();
 
         private const string forestPath = "Environment Objects/LocalObjects_Prefab/Forest";
         private const string proxyUrl = "https://poopoomods-proxy.geforce9614.workers.dev/";
+        private const string latestReleaseApiUrl = "https://api.github.com/repos/helenskeleton/NoLeaves/releases/latest";
+        private const string latestReleasePageUrl = "https://github.com/helenskeleton/NoLeaves/releases/latest";
         private const string API_SECRET = "NoLeaves48927NoPeeking";
         private const int joinReportCooldownSeconds = 15;
         private static readonly int[] leafIndexes =
@@ -54,15 +60,19 @@ namespace NoLeaves
 
         private static DateTime lastJoinReportUtc = DateTime.MinValue;
         private static string lastJoinReportKey = string.Empty;
-        private static bool missingAPI_SECRETLogged;
         private static bool joinReportingDisabled;
 
         private Coroutine removeLeavesCoroutine;
+        private Coroutine updateCheckCoroutine;
+        private bool updateCheckStarted;
+        private bool openedReleasePage;
+        private bool outdatedMessageShown;
+
         private void Awake()
         {
-            Logger = base.Logger;
             SceneManager.sceneLoaded += OnSceneLoaded;
             RemoveLeaves();
+            StartUpdateCheck();
         }
 
         private void Start()
@@ -104,12 +114,6 @@ namespace NoLeaves
 
             if (string.IsNullOrWhiteSpace(API_SECRET))
             {
-                if (!missingAPI_SECRETLogged)
-                {
-                    missingAPI_SECRETLogged = true;
-                    Logger.LogWarning("Join reporting is disabled until Plugin.API_SECRET is configured to match the Cloudflare Worker API_SECRET.");
-                }
-
                 return;
             }
 
@@ -124,21 +128,12 @@ namespace NoLeaves
                 using HttpResponseMessage response = await httpClient.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
-                    string responseBody = await ReadResponseBodySafe(response);
                     joinReportingDisabled = true;
-                    Logger.LogWarning($"Join report rejected with status code {(int)response.StatusCode} ({response.ReasonPhrase}). Body: {responseBody}");
-                    Logger.LogWarning("Join reporting has been disabled for this session after a backend failure.");
-                }
-                else
-                {
-                    Logger.LogInfo($"Join report sent for room '{roomCode}' in region '{region}'.");
                 }
             }
-            catch (Exception ex)
+            catch
             {
                 joinReportingDisabled = true;
-                Logger.LogError($"Join report failed: {ex}");
-                Logger.LogWarning("Join reporting has been disabled for this session after a backend failure.");
             }
         }
 
@@ -146,6 +141,8 @@ namespace NoLeaves
         {
             HttpClient client = new HttpClient();
             client.Timeout = TimeSpan.FromSeconds(5);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd($"NoLeaves/{PluginInfo.PLUGIN_VERSION}");
+            client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
             return client;
         }
 
@@ -338,6 +335,12 @@ namespace NoLeaves
                 StopCoroutine(removeLeavesCoroutine);
                 removeLeavesCoroutine = null;
             }
+
+            if (updateCheckCoroutine != null)
+            {
+                StopCoroutine(updateCheckCoroutine);
+                updateCheckCoroutine = null;
+            }
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -355,32 +358,212 @@ namespace NoLeaves
             removeLeavesCoroutine = StartCoroutine(RemoveLeavesLater());
         }
 
+        private void StartUpdateCheck()
+        {
+            if (updateCheckStarted)
+            {
+                return;
+            }
+
+            updateCheckStarted = true;
+            updateCheckCoroutine = StartCoroutine(CheckForUpdatesLater());
+        }
+
+        private IEnumerator CheckForUpdatesLater()
+        {
+            yield return new WaitForSeconds(3f);
+
+            Task<UpdateCheckResult> updateTask = CheckForUpdatesAsync();
+            while (!updateTask.IsCompleted)
+            {
+                yield return null;
+            }
+
+            if (updateTask.IsFaulted)
+            {
+                updateCheckCoroutine = null;
+                yield break;
+            }
+
+            HandleUpdateResult(updateTask.Result);
+            updateCheckCoroutine = null;
+        }
+
+        private void HandleUpdateResult(UpdateCheckResult result)
+        {
+            switch (result.Status)
+            {
+                case UpdateStatus.UpToDate:
+                    break;
+                case UpdateStatus.Outdated:
+                    if (!outdatedMessageShown)
+                    {
+                        outdatedMessageShown = true;
+                        StartCoroutine(ShowOutdatedVersionMessage(result.LatestVersion));
+                    }
+                    break;
+                case UpdateStatus.Failed:
+                    break;
+            }
+        }
+
+        private static async Task<UpdateCheckResult> CheckForUpdatesAsync()
+        {
+            try
+            {
+                using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, latestReleaseApiUrl);
+                using HttpResponseMessage response = await httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    string body = await ReadResponseBodySafe(response);
+                    return UpdateCheckResult.Fail($"GitHub returned {(int)response.StatusCode} ({response.ReasonPhrase}). Body: {body}");
+                }
+
+                string responseJson = await response.Content.ReadAsStringAsync();
+                string latestVersionText = ExtractJsonStringValue(responseJson, "tag_name");
+                if (!TryParseVersion(latestVersionText, out Version latestVersion))
+                {
+                    return UpdateCheckResult.Fail($"Could not parse latest release version '{latestVersionText}'.");
+                }
+
+                if (!TryParseVersion(PluginInfo.PLUGIN_VERSION, out Version currentVersion))
+                {
+                    return UpdateCheckResult.Fail($"Current plugin version '{PluginInfo.PLUGIN_VERSION}' is invalid.");
+                }
+
+                if (latestVersion <= currentVersion)
+                {
+                    return UpdateCheckResult.UpToDate(latestVersion.ToString());
+                }
+
+                return UpdateCheckResult.Outdated(latestVersion.ToString());
+            }
+            catch (Exception ex)
+            {
+                return UpdateCheckResult.Fail(ex.Message);
+            }
+        }
+
+        private static string ExtractJsonStringValue(string json, string propertyName)
+        {
+            if (string.IsNullOrWhiteSpace(json) || string.IsNullOrWhiteSpace(propertyName))
+            {
+                return string.Empty;
+            }
+
+            Match match = Regex.Match(json, $"\"{Regex.Escape(propertyName)}\"\\s*:\\s*\"(?<value>[^\"\\\\]*(?:\\\\.[^\"\\\\]*)*)\"");
+            if (!match.Success)
+            {
+                return string.Empty;
+            }
+
+            return Regex.Unescape(match.Groups["value"].Value);
+        }
+
+        private static bool TryParseVersion(string rawVersion, out Version version)
+        {
+            version = null;
+            if (string.IsNullOrWhiteSpace(rawVersion))
+            {
+                return false;
+            }
+
+            string trimmed = rawVersion.Trim();
+            int digitIndex = -1;
+            for (int i = 0; i < trimmed.Length; i++)
+            {
+                if (char.IsDigit(trimmed[i]))
+                {
+                    digitIndex = i;
+                    break;
+                }
+            }
+
+            if (digitIndex < 0)
+            {
+                return false;
+            }
+
+            StringBuilder normalized = new StringBuilder();
+            for (int i = digitIndex; i < trimmed.Length; i++)
+            {
+                char c = trimmed[i];
+                if (char.IsDigit(c) || c == '.')
+                {
+                    normalized.Append(c);
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return Version.TryParse(normalized.ToString(), out version);
+        }
+
+        private IEnumerator ShowOutdatedVersionMessage(string latestVersion)
+        {
+            if (!openedReleasePage)
+            {
+                openedReleasePage = true;
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = latestReleasePageUrl,
+                    UseShellExecute = true
+                });
+            }
+
+            GameObject stumpObj = new GameObject("NoLeavesOutdatedMessageObject");
+            Canvas canvas = stumpObj.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.WorldSpace;
+
+            CanvasScaler scaler = stumpObj.AddComponent<CanvasScaler>();
+            scaler.dynamicPixelsPerUnit = 10f;
+            stumpObj.AddComponent<GraphicRaycaster>();
+
+            RectTransform canvasRect = stumpObj.GetComponent<RectTransform>();
+            canvasRect.sizeDelta = new Vector2(9f, 9f);
+            stumpObj.transform.position = new Vector3(-66.9419f, 12.35f, -82.6273f);
+            stumpObj.transform.localScale = Vector3.one * 0.003f;
+            stumpObj.transform.Rotate(0f, 180f, 0f);
+
+            TextMeshProUGUI textObj = new GameObject("OutdatedText").AddComponent<TextMeshProUGUI>();
+            textObj.transform.SetParent(stumpObj.transform, false);
+            textObj.fontSize = 30f;
+            textObj.alignment = TextAlignmentOptions.Center;
+            textObj.color = Color.white;
+
+            RectTransform textRect = textObj.GetComponent<RectTransform>();
+            textRect.anchoredPosition = new Vector2(0f, -50f);
+            textRect.sizeDelta = new Vector2(900f, 700f);
+
+            textObj.text = $"<color=yellow>NoLeaves is outdated.</color>\nInstalled: {PluginInfo.PLUGIN_VERSION}\nLatest: {latestVersion}\nDownload the latest release from GitHub.";
+
+            while (stumpObj != null)
+            {
+                if (Camera.main != null)
+                {
+                    stumpObj.transform.LookAt(Camera.main.transform.position);
+                    stumpObj.transform.Rotate(0f, 180f, 0f);
+                }
+
+                yield return null;
+            }
+        }
+
         private IEnumerator RemoveLeavesLater()
         {
             const int attempts = 12;
             const float delaySeconds = 0.5f;
-            int totalDisabled = 0;
 
             for (int attempt = 0; attempt < attempts; attempt++)
             {
-                int disabledThisPass = RemoveLeavesPass();
-                totalDisabled += disabledThisPass;
+                RemoveLeavesPass();
 
                 if (attempt < attempts - 1)
                 {
                     yield return new WaitForSeconds(delaySeconds);
                 }
-            }
-
-            string sceneName = SceneManager.GetActiveScene().name;
-
-            if (totalDisabled > 0)
-            {
-                Logger.LogInfo($"Disabled {totalDisabled} leaf renderer(s) in scene '{sceneName}'.");
-            }
-            else
-            {
-                Logger.LogWarning($"No leaf renderers were found in scene '{sceneName}'.");
             }
 
             removeLeavesCoroutine = null;
@@ -425,6 +608,52 @@ namespace NoLeaves
             }
 
             return foundObjs;
+        }
+
+        private enum UpdateStatus
+        {
+            UpToDate,
+            Outdated,
+            Failed
+        }
+
+        private sealed class UpdateCheckResult
+        {
+            public UpdateStatus Status { get; private set; }
+            public string LatestVersion { get; private set; }
+            public string Message { get; private set; }
+
+            public static UpdateCheckResult UpToDate(string latestVersion)
+            {
+                return new UpdateCheckResult
+                {
+                    Status = UpdateStatus.UpToDate,
+                    LatestVersion = latestVersion
+                };
+            }
+
+            public static UpdateCheckResult Outdated(string latestVersion)
+            {
+                return new UpdateCheckResult
+                {
+                    Status = UpdateStatus.Outdated,
+                    LatestVersion = latestVersion
+                };
+            }
+
+            public static UpdateCheckResult Fail(string message)
+            {
+                return new UpdateCheckResult
+                {
+                    Status = UpdateStatus.Failed,
+                    Message = message
+                };
+            }
+        }
+
+        internal sealed class CompatibilityLogger
+        {
+            public void LogInfo(string message) { }
         }
 
     }

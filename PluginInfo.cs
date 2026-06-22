@@ -4,6 +4,6 @@ namespace NoLeaves
     {
         public const string PLUGIN_GUID = "com.femboyalyssa.noleaves";
         public const string PLUGIN_NAME = "NoLeaves";
-        public const string PLUGIN_VERSION = "1.1.0";
+        public const string PLUGIN_VERSION = "1.1.1";
     }
 }
