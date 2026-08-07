@@ -29,12 +29,12 @@ namespace NoLeaves
         private const string API_SECRET = "NoLeaves48927NoPeeking";
         private const int joinReportCooldownSeconds = 15;
         private const float presenceHeartbeatIntervalSeconds = 30f;
-        private const string combinedLeafObjectName = "UnityTempFile-5642b89260ac826449cafb7fdeb899e4 (combined by EdMeshCombiner)";
+        private const string combinedLeafObjectName = "UnityTempFile-45379cdec6a019742b8755ad9754f6f6 (combined by EdMeshCombiner)";
         private static readonly int[] leafSiblingIndexes =
         {
-            22,
             23,
-            24
+            24,
+            25
         };
         private static readonly (GTZone Zone, string MapName)[] mapDetectionZones =
         {
