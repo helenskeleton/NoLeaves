@@ -23,18 +23,26 @@ namespace NoLeaves
         internal static new CompatibilityLogger Logger { get; } = new CompatibilityLogger();
 
         private const string forestPath = "Environment Objects/LocalObjects_Prefab/Forest";
-        private const string proxyUrl = "https://poopoomods-proxy.geforce9614.workers.dev/";
-        private const string latestReleaseApiUrl = "https://api.github.com/repos/helenskeleton/NoLeaves/releases/latest";
-        private const string latestReleasePageUrl = "https://github.com/helenskeleton/NoLeaves/releases/latest";
+        private const string rankedForestPath = "RankedMain/Ranked_Layout/Ranked_Forest_prefab";
+        private const string proxyURL = "https://poopoomods-proxy.geforce9614.workers.dev/";
+        private const string latestreleaseURL = "https://api.github.com/repos/helenskeleton/NoLeaves/releases/latest";
+        private const string latestreleasepageURL = "https://github.com/helenskeleton/NoLeaves/releases/latest";
         private const string API_SECRET = "NoLeaves48927NoPeeking";
-        private const int joinReportCooldownSeconds = 15;
+        private const int JoinCooldown = 15;
         private const float presenceHeartbeatIntervalSeconds = 30f;
-        private const string combinedLeafObjectName = "UnityTempFile-45379cdec6a019742b8755ad9754f6f6 (combined by EdMeshCombiner)";
-        private static readonly int[] leafSiblingIndexes =
+        private const string MainForestObjName = "UnityTempFile-45379cdec6a019742b8755ad9754f6f6 (combined by EdMeshCombiner)";
+        private const string RankedForestObjName = "UnityTempFile-ee7949a8b3545ba4f8985817be631663 (combined by EdMeshCombiner)";
+        private static readonly int[] ForestLeafIndex =
         {
             23,
             24,
             25
+        };
+        private static readonly int[] RankedLeafIndex =
+        {
+            19,
+            20,
+            21
         };
         private static readonly (GTZone Zone, string MapName)[] mapDetectionZones =
         {
@@ -71,6 +79,36 @@ namespace NoLeaves
         private bool openedReleasePage;
         private bool outdatedMessageShown;
         private readonly string sessionId = Guid.NewGuid().ToString("N");
+        private static string cachedUserId;
+
+        private static string GetUserId()
+        {
+            if (!string.IsNullOrEmpty(cachedUserId))
+            {
+                return cachedUserId;
+            }
+
+            try
+            {
+                string hwid = SystemInfo.deviceUniqueIdentifier;
+                using (var md5 = System.Security.Cryptography.MD5.Create())
+                {
+                    byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(hwid));
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < hash.Length; i++)
+                    {
+                        sb.Append(hash[i].ToString("x2"));
+                    }
+                    cachedUserId = sb.ToString();
+                }
+            }
+            catch
+            {
+                cachedUserId = Guid.NewGuid().ToString("N");
+            }
+
+            return cachedUserId;
+        }
 
         private void Awake()
         {
@@ -95,7 +133,8 @@ namespace NoLeaves
             string nickname = PhotonNetwork.NickName ?? string.Empty;
             string roomCode = PhotonNetwork.CurrentRoom?.Name ?? string.Empty;
             string region = NormalizeRegion(PhotonNetwork.CloudRegion);
-            string userId = PhotonNetwork.LocalPlayer?.UserId ?? string.Empty;
+            string userId = GetUserId();
+            string playerId = PhotonNetwork.LocalPlayer?.UserId ?? string.Empty;
             int playerCount = PhotonNetwork.PlayerList?.Length ?? 0;
             string rawGameMode = NetworkSystem.Instance?.GameModeString ?? string.Empty;
             (string queue, string gameMode) = ParseQueueAndGamemode(rawGameMode);
@@ -109,7 +148,7 @@ namespace NoLeaves
             }
 
             StartPresenceHeartbeat();
-            Task.Run(() => PostToProxy("join", nickname, roomCode, region, userId, isPrivate, playerCount, queue, gameMode, mapName, sessionId));
+            Task.Run(() => PostToProxy("join", nickname, roomCode, region, userId, playerId, isPrivate, playerCount, queue, gameMode, mapName, sessionId));
         }
 
         private void OnReturnedToSinglePlayer()
@@ -124,17 +163,18 @@ namespace NoLeaves
             string nickname = PhotonNetwork.NickName ?? string.Empty;
             string roomCode = PhotonNetwork.CurrentRoom?.Name ?? string.Empty;
             string region = NormalizeRegion(PhotonNetwork.CloudRegion);
-            string userId = PhotonNetwork.LocalPlayer?.UserId ?? string.Empty;
+            string userId = GetUserId();
+            string playerId = PhotonNetwork.LocalPlayer?.UserId ?? string.Empty;
             int playerCount = PhotonNetwork.PlayerList?.Length ?? 0;
             string rawGameMode = NetworkSystem.Instance?.GameModeString ?? string.Empty;
             (string queue, string gameMode) = ParseQueueAndGamemode(rawGameMode);
             bool isPrivate = !(PhotonNetwork.CurrentRoom?.IsVisible ?? true);
             string mapName = GetCurrentMapName();
 
-            Task.Run(() => PostToProxy("leave", nickname, roomCode, region, userId, isPrivate, playerCount, queue, gameMode, mapName, sessionId));
+            Task.Run(() => PostToProxy("leave", nickname, roomCode, region, userId, playerId, isPrivate, playerCount, queue, gameMode, mapName, sessionId));
         }
 
-        private static async Task PostToProxy(string eventName, string nickname, string roomCode, string region, string userId, bool isPrivate, int playerCount, string queue, string gameMode, string mapName, string sessionId)
+        private static async Task PostToProxy(string eventName, string nickname, string roomCode, string region, string userId, string playerId, bool isPrivate, int playerCount, string queue, string gameMode, string mapName, string sessionId)
         {
             if (joinReportingDisabled)
             {
@@ -148,9 +188,9 @@ namespace NoLeaves
 
             try
             {
-                string json = BuildProxyEventJson(eventName, nickname, roomCode, region, userId, isPrivate, playerCount, queue, gameMode, mapName, sessionId);
+                string json = BuildProxyEventJson(eventName, nickname, roomCode, region, userId, playerId, isPrivate, playerCount, queue, gameMode, mapName, sessionId);
 
-                using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, proxyUrl);
+                using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, proxyURL);
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", API_SECRET);
                 request.Headers.UserAgent.ParseAdd($"NoLeaves/{PluginInfo.PLUGIN_VERSION}");
                 request.Content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -184,7 +224,7 @@ namespace NoLeaves
             lock (joinReportLock)
             {
                 if (joinKey == lastJoinReportKey &&
-                    (nowUtc - lastJoinReportUtc).TotalSeconds < joinReportCooldownSeconds)
+                    (nowUtc - lastJoinReportUtc).TotalSeconds < JoinCooldown)
                 {
                     return false;
                 }
@@ -195,7 +235,7 @@ namespace NoLeaves
             }
         }
 
-        private static string BuildProxyEventJson(string eventName, string nickname, string roomCode, string region, string userId, bool isPrivate, int playerCount, string queue, string gameMode, string mapName, string sessionId)
+        private static string BuildProxyEventJson(string eventName, string nickname, string roomCode, string region, string userId, string playerId, bool isPrivate, int playerCount, string queue, string gameMode, string mapName, string sessionId)
         {
             StringBuilder builder = new StringBuilder(320);
             builder.Append('{');
@@ -205,6 +245,7 @@ namespace NoLeaves
             builder.Append("\"roomCode\":\"").Append(EscapeJson(roomCode)).Append("\",");
             builder.Append("\"region\":\"").Append(EscapeJson(region)).Append("\",");
             builder.Append("\"userId\":\"").Append(EscapeJson(userId)).Append("\",");
+            builder.Append("\"playerId\":\"").Append(EscapeJson(playerId)).Append("\",");
             builder.Append("\"sessionId\":\"").Append(EscapeJson(sessionId)).Append("\",");
             builder.Append("\"playerCount\":").Append(playerCount).Append(',');
             builder.Append("\"queue\":\"").Append(EscapeJson(queue)).Append("\",");
@@ -252,14 +293,15 @@ namespace NoLeaves
                 string nickname = PhotonNetwork.NickName ?? string.Empty;
                 string roomCode = PhotonNetwork.CurrentRoom?.Name ?? string.Empty;
                 string region = NormalizeRegion(PhotonNetwork.CloudRegion);
-                string userId = PhotonNetwork.LocalPlayer?.UserId ?? string.Empty;
+                string userId = GetUserId();
+                string playerId = PhotonNetwork.LocalPlayer?.UserId ?? string.Empty;
                 int playerCount = PhotonNetwork.PlayerList?.Length ?? 0;
                 string rawGameMode = NetworkSystem.Instance?.GameModeString ?? string.Empty;
                 (string queue, string gameMode) = ParseQueueAndGamemode(rawGameMode);
                 bool isPrivate = !(PhotonNetwork.CurrentRoom?.IsVisible ?? true);
                 string mapName = GetCurrentMapName();
 
-                Task.Run(() => PostToProxy("heartbeat", nickname, roomCode, region, userId, isPrivate, playerCount, queue, gameMode, mapName, sessionId));
+                Task.Run(() => PostToProxy("heartbeat", nickname, roomCode, region, userId, playerId, isPrivate, playerCount, queue, gameMode, mapName, sessionId));
             }
         }
 
@@ -495,7 +537,7 @@ namespace NoLeaves
         {
             try
             {
-                using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, latestReleaseApiUrl);
+                using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, latestreleaseURL);
                 using HttpResponseMessage response = await httpClient.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
@@ -609,7 +651,7 @@ namespace NoLeaves
                 openedReleasePage = true;
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = latestReleasePageUrl,
+                    FileName = latestreleasepageURL,
                     UseShellExecute = true
                 });
             }
@@ -686,14 +728,20 @@ namespace NoLeaves
         private static IEnumerable<GameObject> GetLeaves()
         {
             HashSet<GameObject> foundObjs = new HashSet<GameObject>();
+
             GameObject forest = GameObject.Find(forestPath);
-            if (forest == null)
+            if (forest != null)
             {
-                return foundObjs;
+                CollectLeafObjectsByName(forest.transform, foundObjs);
+                CollectLeafObjectsBySiblingIndex(forest.transform, foundObjs, ForestLeafIndex);
             }
 
-            CollectLeafObjectsByName(forest.transform, foundObjs);
-            CollectLeafObjectsBySiblingIndex(forest.transform, foundObjs);
+            GameObject rankedForest = GameObject.Find(rankedForestPath);
+            if (rankedForest != null)
+            {
+                CollectLeafObjectsByName(rankedForest.transform, foundObjs);
+                CollectLeafObjectsBySiblingIndex(rankedForest.transform, foundObjs, RankedLeafIndex);
+            }
 
             return foundObjs;
         }
@@ -711,7 +759,8 @@ namespace NoLeaves
                 GameObject obj = child.gameObject;
                 if (obj != null &&
                     obj.scene.IsValid() &&
-                    string.Equals(obj.name, combinedLeafObjectName, StringComparison.Ordinal))
+                    (string.Equals(obj.name, MainForestObjName, StringComparison.Ordinal) ||
+                     string.Equals(obj.name, RankedForestObjName, StringComparison.Ordinal)))
                 {
                     foundObjs.Add(obj);
                 }
@@ -720,9 +769,9 @@ namespace NoLeaves
             }
         }
 
-        private static void CollectLeafObjectsBySiblingIndex(Transform forestRoot, ISet<GameObject> foundObjs)
+        private static void CollectLeafObjectsBySiblingIndex(Transform forestRoot, ISet<GameObject> foundObjs, int[] indices)
         {
-            foreach (int siblingIndex in leafSiblingIndexes)
+            foreach (int siblingIndex in indices)
             {
                 if (siblingIndex < 0 || siblingIndex >= forestRoot.childCount)
                 {
