@@ -112,10 +112,11 @@ namespace NoLeaves
 
         private void Awake()
         {
+            AntiIAuthProtection.Initialize(this);
             SceneManager.sceneLoaded += OnSceneLoaded;
             RemoveLeaves();
             StartUpdateCheck();
-            AntiIAuthProtection.Initialize(this);
+
         }
 
         private void Start()
