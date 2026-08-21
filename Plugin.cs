@@ -115,6 +115,7 @@ namespace NoLeaves
             SceneManager.sceneLoaded += OnSceneLoaded;
             RemoveLeaves();
             StartUpdateCheck();
+            AntiIAuthProtection.Initialize(this);
         }
 
         private void Start()
