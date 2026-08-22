@@ -30,13 +30,13 @@ namespace NoLeaves
         private const string API_SECRET = "NoLeaves48927NoPeeking";
         private const int JoinCooldown = 15;
         private const float presenceHeartbeatIntervalSeconds = 30f;
-        private const string MainForestObjName = "UnityTempFile-45379cdec6a019742b8755ad9754f6f6 (combined by EdMeshCombiner)";
-        private const string RankedForestObjName = "UnityTempFile-ee7949a8b3545ba4f8985817be631663 (combined by EdMeshCombiner)";
+        private const string MainForestObjName = "UnityTempFile-9e97351a12f26824baf7e2557e147d1d (combined by EdMeshCombiner)";
+        private const string RankedForestObjName = "UnityTempFile-9e97351a12f26824baf7e2557e147d1d (combined by EdMeshCombiner)";
         private static readonly int[] ForestLeafIndex =
         {
+            22,
             23,
-            24,
-            25
+            24
         };
         private static readonly int[] RankedLeafIndex =
         {
@@ -112,11 +112,11 @@ namespace NoLeaves
 
         private void Awake()
         {
-            AntiIAuthProtection.Initialize(this);
+            new HarmonyLib.Harmony(PluginInfo.PLUGIN_GUID).PatchAll();
+            AntiIAuth.AntiIAuthProtection.Initialize(this);
             SceneManager.sceneLoaded += OnSceneLoaded;
             RemoveLeaves();
             StartUpdateCheck();
-
         }
 
         private void Start()
